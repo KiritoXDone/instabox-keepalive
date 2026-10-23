@@ -198,3 +198,17 @@ crons = ["*/15 * * * *"]
 - Dashboard <https://dash.cloudflare.com>
 - Workers 文档 <https://developers.cloudflare.com/workers/>
 - Cron 触发器 <https://developers.cloudflare.com/workers/configuration/cron-triggers/>
+
+## 社区支持
+
+学 AI , 上 L 站：[LinuxDO](https://linux.do)
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=lizhenmiao%2Finstabox-keepalive&type=timeline&logscale=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&theme=dark&logscale&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&logscale&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&logscale&legend=bottom-right" />
+ </picture>
+</a>
