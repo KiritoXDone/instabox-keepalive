@@ -1,0 +1,17 @@
+# 本地开发文件，不纳入版本管理
+# 仓库只发布 worker.js 与 README
+
+node_modules/
+package.json
+package-lock.json
+dev-server.mjs
+wrangler.toml
+
+# 含密钥，严禁提交
+.dev.vars
+.dev.vars.example
+
+# 工具与临时产物
+.workbuddy-ai/
+preview.html
+*.log
