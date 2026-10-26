@@ -1,7 +1,7 @@
 import { loadConfigs, saveConfig, dropConfig, addLog, loadLogs, clearLogs } from "./storage.js";
 
 /**
- * InstaBox 机器管理面板 —— Cloudflare Worker D1 版
+ * InstaBox 机器管理面板 —— Cloudflare Worker 版
  *
  * 功能：
  *   1. 可视化管理所有 InstaBox 机器（启动 / 暂停 / 唤醒 / 停止 / 删除 / 新建）

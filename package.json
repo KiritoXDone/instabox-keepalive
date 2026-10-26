@@ -1,5 +1,5 @@
 {
-  "name": "instabox-keepalive-d1",
+  "name": "instabox-keepalive",
   "private": true,
   "type": "module",
   "scripts": {

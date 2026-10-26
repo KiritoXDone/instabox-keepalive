@@ -1,8 +1,8 @@
-# InstaBox 保活面板 · D1 版
+# InstaBox 保活面板
 
-基于 [lizhenmiao/instabox-keepalive](https://github.com/lizhenmiao/instabox-keepalive) 的 D1 适配版。保留原有面板和活动租约逻辑，配置与日志通过 Cloudflare D1 绑定保存，无需单独的 Redis 服务和存储凭据。
+部署在 Cloudflare Workers 上的 InstaBox 机器管理与保活面板。通过活动租约定时维护指定机器，提供机器状态、保活开关和操作日志。本仓库独立维护实现与部署配置。
 
-`worker.js` 负责面板、API 和定时任务；`storage.js` 负责 D1 持久化；`migrations/` 保存数据库迁移。上游基线为 `7dd559358b8c156e0d7080fd083e8af7a2000130`，Git 历史保留。
+`worker.js` 负责面板、API 和定时任务；`storage.js` 负责 D1 持久化；`migrations/` 保存数据库迁移。
 
 ## 为什么需要它
 
@@ -37,7 +37,7 @@ InstaBox 的机器空闲 30 分钟会自动暂停。按当前官方文档，免�
 
 ## 上游效果参考
 
-以下图片来自上游项目，不代表本 D1 适配版已通过线上持续保活验证。
+以下图片来自上游项目，不代表本实现已通过线上持续保活验证。
 
 ![连续运行时长](images/komari-uptime.png)
 
@@ -163,3 +163,7 @@ npx wrangler deploy --dry-run
 - Workers 文档 <https://developers.cloudflare.com/workers/>
 - D1 文档 <https://developers.cloudflare.com/d1/>
 - Cron 触发器 <https://developers.cloudflare.com/workers/configuration/cron-triggers/>
+
+## 项目来源
+
+项目起点为 [lizhenmiao/instabox-keepalive](https://github.com/lizhenmiao/instabox-keepalive)，基线提交为 `7dd559358b8c156e0d7080fd083e8af7a2000130`，保留原始 Git 历史。后续实现与部署配置在本仓库独立维护。
