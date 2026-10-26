@@ -1,12 +1,14 @@
-# InstaBox 保活面板
+# InstaBox 保活面板 · D1 版
 
-给 InstaBox 云机器做 7×24 保活的可视化管理面板。单文件 Cloudflare Worker，前端页面、API 代理、定时保活全部内嵌在 `worker.js` 里，配置与日志存放在 Upstash Redis。
+基于 [lizhenmiao/instabox-keepalive](https://github.com/lizhenmiao/instabox-keepalive) 的 D1 适配版。保留原有面板和活动租约逻辑，配置与日志通过 Cloudflare D1 绑定保存，无需单独的 Redis 服务和存储凭据。
+
+`worker.js` 负责面板、API 和定时任务；`storage.js` 负责 D1 持久化；`migrations/` 保存数据库迁移。上游基线为 `7dd559358b8c156e0d7080fd083e8af7a2000130`，Git 历史保留。
 
 ## 为什么需要它
 
-InstaBox 的机器空闲 30 分钟会自动暂停。免费账号的 `autoSuspendAfterSeconds` 只允许在 5–30 分钟之间取值，`0`（关闭空闲暂停）需要账号具备 manual lifecycle 权限，该权限由服务端管理员控制。
+InstaBox 的机器空闲 30 分钟会自动暂停。按当前官方文档，免费套餐固定空闲 30 分钟暂停，付费套餐可以调整或关闭空闲暂停。
 
-本面板通过 **activity lease（活动租约）** 保活：租约有效期内机器不会进入空闲暂停，定时续期即可长期运行。租约单次最长 3600 秒，配合 15 分钟一次的定时任务，即使连续几次请求失败也不会中断。
+本面板通过 **activity lease（活动租约）** 保活：租约有效期内维持任务活动，单次最长 3600 秒，每 15 分钟续期。租约不等于取消平台的其他运行期限或回收规则，持续保活效果须通过实际运行记录确认。
 
 ## 功能
 
@@ -29,11 +31,13 @@ InstaBox 的机器空闲 30 分钟会自动暂停。免费账号的 `autoSuspend
 
 ![机器列表](images/panel-machines.png)
 
-**保活日志**：记录每次续期与手动操作，存于 Upstash Redis，可一键清空。
+**保活日志**：记录每次续期与手动操作，存于 Cloudflare D1，可一键清空。
 
 ![保活日志](images/panel-logs.png)
 
-## 保活效果
+## 上游效果参考
+
+以下图片来自上游项目，不代表本 D1 适配版已通过线上持续保活验证。
 
 ![连续运行时长](images/komari-uptime.png)
 
@@ -43,83 +47,47 @@ InstaBox 的机器空闲 30 分钟会自动暂停。免费账号的 `autoSuspend
 
 ## 前置条件
 
-| 依赖 | 获取方式 |
-|---|---|
-| InstaBox API Key | 登录 [InstaBox 控制台](https://dashboard.instabox.sh/dashboard/machines)，进入 **Profile → API keys** 创建，`ibk_` 开头 |
-| Upstash Redis | 在 [Upstash](https://upstash.com) 创建，步骤见下方 |
-| Cloudflare 账号 | 免费注册，登录 [Cloudflare Dashboard](https://dash.cloudflare.com) |
-
-## 准备 Upstash Redis
-
-1. 打开 <https://upstash.com>，点 **Sign In**，选择 **Continue with GitHub** 直接登录，不需要单独注册。
-2. 进入控制台选择 Redis 进行创建，区域挑离你较近的节点，计划保持 **Free**。
-3. 创建完成后进入数据库详情页，在 **REST API** 区域复制两个值，稍后填入 Worker 环境变量：
-   - `UPSTASH_REDIS_REST_URL`
-   - `UPSTASH_REDIS_REST_TOKEN`
-
-免费额度为每月 **500,000 次命令**、**250 MB 存储**、**10 GB 带宽**。本面板每 15 分钟续期一次，一天约 96 轮，每轮几条命令，月消耗不到 1.5 万次，占免费额度不足 3%。
-
-![Upstash 免费额度](images/upstash-free-tier.png)
+- Cloudflare 账号，启用 Workers 和 D1。
+- InstaBox API Key，保活需要 `machines:write` 或 `machines:exec`；面板其他管理操作需要对应权限。
+- 支持所锁定 Wrangler 版本的 Node.js 和 npm。
 
 ## 部署
 
-### 方式一：Cloudflare 网页控制台
+```bash
+npm ci
+npx wrangler login
+npx wrangler d1 create instabox-keepalive
+```
 
-1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Worker**
-2. 命名（例如 `instabox-panel`）后点 **Deploy**，先用默认模板部署
-3. 点 **Edit code**，删除默认代码，粘贴 `worker.js` 全文，点 **Deploy**
-   > 编辑器默认就是 ES Module 格式，代码使用 `export default`，直接粘贴即可，不要切换为 Service Worker 类型。
-4. 进入 **Settings → Variables and Secrets**，逐个添加以下四个变量，类型全部选择 **Secret**：
-
-   | 变量名 | 值 |
-   |---|---|
-   | `INSTABOX_API_KEY` | InstaBox 的 API Key |
-   | `ADMIN_PASSWORD` | 面板登录密码，自行设定 |
-   | `UPSTASH_REDIS_REST_URL` | Upstash Redis 的 REST 地址 |
-   | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis 的 REST 令牌 |
-
-   添加完成后点 **Deploy** 使其生效。
-5. 进入 **Settings → Trigger Events → Cron Triggers**，点 **Add**，填入：
-
-   ```
-   */15 * * * *
-   ```
-
-6. 访问 `https://<worker 名称>.<你的子域>.workers.dev`，输入 `ADMIN_PASSWORD` 登录。
-
-### 方式二：wrangler CLI
+把创建结果中的数据库 UUID 填入 `wrangler.toml` 的 `database_id`，替换全零占位值；绑定名保持 `DB`。然后初始化数据库：
 
 ```bash
-npm install -g wrangler
-wrangler login
-
-wrangler deploy
-
-wrangler secret put INSTABOX_API_KEY
-wrangler secret put ADMIN_PASSWORD
-wrangler secret put UPSTASH_REDIS_REST_URL
-wrangler secret put UPSTASH_REDIS_REST_TOKEN
+npx wrangler d1 migrations apply instabox-keepalive --remote
+npx wrangler deploy
+npx wrangler secret put INSTABOX_API_KEY
+npx wrangler secret put ADMIN_PASSWORD
 ```
 
-CLI 部署需要在同目录自行创建 `wrangler.toml`：
+`secret put` 会交互读取密钥，不要将真实值写进源码、命令参数或 Git。Worker 已配置 `*/15 * * * *` 定时触发器。首次部署到填完两个 Secret 之前，保活任务无法执行；设置完成后登录面板，只为需要维护的机器开启保活。
 
-```toml
-name = "instabox-panel"
-main = "worker.js"
-compatibility_date = "2026-10-01"
+## 配置
 
-[triggers]
-crons = ["*/15 * * * *"]
-```
-
-## 环境变量
-
-| 变量 | 必填 | 说明 |
+| 名称 | 类型 | 说明 |
 |---|---|---|
-| `INSTABOX_API_KEY` | 是 | InstaBox API Key，需具备 `machines:write` 或 `machines:exec` 权限 |
-| `ADMIN_PASSWORD` | 是 | 面板登录密码，所有 `/api` 请求通过 `X-Panel-Auth` 头校验 |
-| `UPSTASH_REDIS_REST_URL` | 是 | 形如 `https://xxx.upstash.io` |
-| `UPSTASH_REDIS_REST_TOKEN` | 是 | Upstash 数据库的 REST Token |
+| `DB` | D1 binding | 保存机器保活配置和日志 |
+| `INSTABOX_API_KEY` | Worker Secret | InstaBox API Key |
+| `ADMIN_PASSWORD` | Worker Secret | 面板密码，API 使用 `X-Panel-Auth` 校验 |
+
+## 本地验证
+
+```bash
+npm test
+npx wrangler deploy --dry-run
+```
+
+测试使用 Miniflare 的本地 D1 数据库和模拟的 InstaBox API，覆盖配置更新、日志保留与事务回滚、鉴权、续租及上游失败。测试不访问真实机器，不能代替线上持续保活验证。
+
+需要本地运行面板时，在已忽略的 `.dev.vars` 中填入两个 Secret，先执行 `npx wrangler d1 migrations apply instabox-keepalive --local`，再执行 `npx wrangler dev`。D1 由 Wrangler 在本地模拟，不需要云端数据库凭据。
 
 ## 使用
 
@@ -134,27 +102,29 @@ crons = ["*/15 * * * *"]
 | 操作 | 效果 |
 |---|---|
 | 暂停 | 保留内存和运行中的进程，唤醒后从原地继续 |
-| 停止 | 相当于关机，只保留 `/data` 里的文件，下次启动是冷启动 |
+| 停止 | 相当于关机，下次启动是冷启动，内存中的进程状态不保留 |
 
 **自动保活开关**：打开后立即续期一次，卡片显示上次保活、下次保活与租约剩余时间。手动暂停或停止某台机器时，该机器的保活会自动关闭，避免定时任务将其重新拉起。
 
-**日志页**：查看最近 50 条保活与操作记录，可一键清空。日志存放在 Redis，与浏览器无关。
+**日志页**：查看最近 50 条保活与操作记录，可一键清空。日志存放在 D1，与浏览器无关。
 
 ## 保活机制
 
 1. Cloudflare 的 Cron 触发器（`*/15 * * * *`）按计划调用 Worker 导出的 `scheduled()` 处理函数，由它执行保活任务：对所有开启保活的机器调用 `PUT /v1/machines/{id}/activity-leases/keepalive`，租约时长 3600 秒。
 2. 租约有效期内机器不会空闲暂停；租约到期后才重新开始计算 30 分钟空闲时间。
 3. 机器处于 `stopped` 状态时租约接口会拒绝，任务会自动下发 `POST /v1/machines/{id}/start`。
-4. 定时任务每轮把结果写回 Redis，并在日志中留下记录。
+4. 定时任务每轮把结果写回 D1，并在日志中留下记录。
 
 `fetch()` 处理面板页面与 API 请求，`scheduled()` 只负责定时保活，两者互不影响。因为单次租约就有 1 小时，即使定时任务连续失败两三次，机器也不会进入暂停。
 
 ## 存储结构
 
-| Key | 类型 | 内容 |
-|---|---|---|
-| `instabox:machines` | Hash | field 为机器 ID，value 为 JSON：保活开关、租约到期时间、上次执行结果 |
-| `instabox:logs` | List | 保活与操作日志，`LPUSH` + `LTRIM` 保留最近 200 条 |
+| 表 | 内容 |
+|---|---|
+| `machine_configs` | `machine_id` 主键及 `config_json`：保活开关、租约期限和最近执行结果 |
+| `keepalive_logs` | 自增 ID 及 `entry_json`；保留最新 200 条，面板读取最新 50 条 |
+
+配置沿用上游 JSON 字段；所有写入值使用 SQL 参数绑定。日志新增与裁剪在同一 D1 batch 事务中执行，清空日志不会删除机器配置。此版本面向新部署，不自动导入已有 Upstash 数据。
 
 ## 常见问题
 
@@ -164,15 +134,15 @@ crons = ["*/15 * * * *"]
 
 **保活开关打开后状态没有更新**
 
-检查 `UPSTASH_REDIS_REST_URL` 与 `UPSTASH_REDIS_REST_TOKEN` 是否正确。面板顶部会显示 Redis 读取失败的提示。
+检查 Worker 的 `DB` 绑定、数据库 ID，以及远端迁移是否成功执行。面板顶部会显示配置读取失败的提示。
 
 **机器仍然会暂停**
 
-确认该机器的保活开关为开启状态，且日志页有持续的「自动保活」记录。若日志中出现 `HTTP 404 not_found`，说明 Redis 里存在无效的机器 ID，清空后重新开启即可。
+确认该机器的保活开关为开启状态，且日志页有持续的「自动保活」记录。若日志中出现 `HTTP 404 not_found`，说明 D1 里存在无效的机器 ID，清空后重新开启即可。
 
 **能否直接把空闲暂停关掉**
 
-不能。`autoSuspendAfterSeconds` 设为 `0` 需要账号具备 manual lifecycle 权限，该权限由服务端管理员控制；部分套餐也不支持常驻。租约方案不需要该权限。
+按当前官方文档，免费套餐不能关闭空闲暂停；付费套餐可设置 `autoSuspendAfterSeconds=0`。本项目使用活动租约，不修改此设置。
 
 **面板部署后是否还需要代理**
 
@@ -187,28 +157,9 @@ crons = ["*/15 * * * *"]
 - 文档 <https://instabox.sh/docs>
 - API 地址 `https://api.instabox.sh`
 
-**Upstash**
-
-- 官网 <https://upstash.com> —— 支持 GitHub 账号直接登录
-- 控制台 <https://console.upstash.com/redis> —— 创建 Redis 后在此复制 REST URL 与 REST Token
-- Redis 文档 <https://upstash.com/docs/redis>
-
 **Cloudflare**
 
 - Dashboard <https://dash.cloudflare.com>
 - Workers 文档 <https://developers.cloudflare.com/workers/>
+- D1 文档 <https://developers.cloudflare.com/d1/>
 - Cron 触发器 <https://developers.cloudflare.com/workers/configuration/cron-triggers/>
-
-## 社区支持
-
-学 AI , 上 L 站：[LinuxDO](https://linux.do)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=lizhenmiao%2Finstabox-keepalive&type=timeline&logscale=&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&theme=dark&logscale&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&logscale&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=lizhenmiao/instabox-keepalive&type=timeline&logscale&legend=bottom-right" />
- </picture>
-</a>
