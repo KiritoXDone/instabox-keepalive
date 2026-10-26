@@ -6,7 +6,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "instabox-keepalive"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "8e425952-2faf-4b5e-a98d-af89f2aa2f0e"
 migrations_dir = "migrations"
 
 [triggers]

@@ -59,7 +59,7 @@ npx wrangler login
 npx wrangler d1 create instabox-keepalive
 ```
 
-把创建结果中的数据库 UUID 填入 `wrangler.toml` 的 `database_id`，替换全零占位值；绑定名保持 `DB`。然后初始化数据库：
+把创建结果中的数据库 UUID 填入 `wrangler.toml` 的 `database_id`，替换本仓库维护者的部署 ID；绑定名保持 `DB`。然后初始化数据库：
 
 ```bash
 npx wrangler d1 migrations apply instabox-keepalive --remote
