@@ -1,103 +1,28 @@
+import { loadConfigs, saveConfig, dropConfig, addLog, loadLogs, clearLogs } from "./storage.js";
+
 /**
- * InstaBox 机器管理面板 —— Cloudflare Worker 单文件版
+ * InstaBox 机器管理面板 —— Cloudflare Worker D1 版
  *
  * 功能：
  *   1. 可视化管理所有 InstaBox 机器（启动 / 暂停 / 唤醒 / 停止 / 删除 / 新建）
  *   2. 每台机器可独立开关「自动保活」
  *   3. Cron 定时通过 activity-leases 续期保活（租约 3600 秒，永不触发 30 分钟空闲暂停）
- *   4. 保活配置与最近 200 条日志存放在 Upstash Redis（REST 接口，纯 fetch 无依赖）
+ *   4. 保活配置与最近 200 条日志存放在 Cloudflare D1
  *
  * 环境变量（在 Worker 设置中配置）：
  *   INSTABOX_API_KEY        InstaBox 的 API 密钥（ibk_ 开头）
  *   ADMIN_PASSWORD          面板登录密码
- *   UPSTASH_REDIS_REST_URL  Upstash Redis 的 REST 地址
- *   UPSTASH_REDIS_REST_TOKEN Upstash Redis 的 REST 令牌
+ *   DB                      Cloudflare D1 数据库绑定
  *
  * Cron 触发器建议每 15 分钟一次（租约 1 小时，容错充足）
  */
 
 const API_ORIGIN = "https://api.instabox.sh";
-const REDIS_PREFIX = "instabox";
 const LEASE_ID = "keepalive";
 const LEASE_TTL_SECONDS = 3600;      // 活动租约时长，接口上限即 3600
-const LOG_KEEP = 200;                // Redis 中保留的日志条数
 const REQUEST_TIMEOUT_MS = 55_000;   // 稍大于 wake/lease 接口的最长等待时间
 const KEY_RE = /^ibk_[A-Za-z0-9_-]+$/;
 const MACHINE_RE = /^m_[A-Za-z0-9_-]+$/;
-
-// ---------- Upstash Redis（REST，pipeline 方式统一收发） ----------
-
-/** 执行一组 Redis 命令，返回每条命令的结果数组；失败时整批抛错（带底层原因） */
-async function redis(env, commands) {
-  let res;
-  try {
-    res = await fetch(env.UPSTASH_REDIS_REST_URL + "/pipeline", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + env.UPSTASH_REDIS_REST_TOKEN,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(commands),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (e) {
-    const timedOut = e && (e.name === "TimeoutError" || e.name === "AbortError");
-    const cause = (e && (e.cause?.code || e.code)) || "";
-    throw new Error((timedOut ? "Redis 请求超时" : "Redis 连接失败") + (cause ? "（" + cause + "）" : ""));
-  }
-  if (!res.ok) throw new Error("Redis HTTP " + res.status);
-  const data = await res.json().catch(() => { throw new Error("Redis 返回了无法解析的内容"); });
-  for (const item of data) {
-    if (item.error) throw new Error("Redis: " + item.error);
-  }
-  return data.map((item) => item.result);
-}
-
-/**
- * 把 HGETALL 的结果统一成 { field: value }。
- * Upstash 的 /pipeline 接口可能返回扁平数组 [f1,v1,f2,v2,...]，也可能返回对象，
- * 两种都要兼容，否则 key 会退化成数组下标。
- */
-function toHash(raw) {
-  const out = {};
-  if (!raw) return out;
-  if (Array.isArray(raw)) {
-    for (let i = 0; i + 1 < raw.length; i += 2) out[raw[i]] = raw[i + 1];
-    return out;
-  }
-  if (typeof raw === "object") {
-    for (const [k, v] of Object.entries(raw)) out[k] = v;
-  }
-  return out;
-}
-
-/** 读全部机器的保活配置：Hash field=machineId, value=JSON 字符串 */
-async function loadConfigs(env) {
-  const [raw] = await redis(env, [["HGETALL", REDIS_PREFIX + ":machines"]]);
-  const out = {};
-  for (const [id, json] of Object.entries(toHash(raw))) {
-    try { out[id] = JSON.parse(json); } catch { /* 忽略坏数据 */ }
-  }
-  return out;
-}
-
-/** 写入单台机器的保活配置 */
-function saveConfig(env, machineId, config) {
-  return redis(env, [["HSET", REDIS_PREFIX + ":machines", machineId, JSON.stringify(config)]]);
-}
-
-/** 删除某台机器的保活配置（机器被删除时调用） */
-function dropConfig(env, machineId) {
-  return redis(env, [["HDEL", REDIS_PREFIX + ":machines", machineId]]);
-}
-
-/** 追加一条日志并裁剪到最近 LOG_KEEP 条 */
-function addLog(env, entry) {
-  return redis(env, [
-    ["LPUSH", REDIS_PREFIX + ":logs", JSON.stringify(entry)],
-    ["LTRIM", REDIS_PREFIX + ":logs", "0", String(LOG_KEEP - 1)],
-  ]);
-}
 
 // ---------- InstaBox API ----------
 
@@ -205,8 +130,8 @@ async function handleApi(request, env, url) {
   // 登录校验
   if (path === "/auth" && method === "POST") return json({ ok: true });
 
-  // 机器列表：InstaBox 实时状态 + Redis 保活配置合并
-  // Redis 读取失败不影响机器列表展示，只把保活状态标为未知
+  // 机器列表：InstaBox 实时状态 + D1 保活配置合并
+  // D1 读取失败不影响机器列表展示，只把保活状态标为未知
   if (path === "/machines" && method === "GET") {
     const list = await ib(env, "GET", "/v1/machines");
     if (!list.ok) return json({ error: "获取机器列表失败：" + (list.message || list.status) }, 502);
@@ -290,12 +215,11 @@ async function handleApi(request, env, url) {
 
   // 日志
   if (path === "/logs" && method === "GET") {
-    const [logs] = await redis(env, [["LRANGE", REDIS_PREFIX + ":logs", "0", "49"]]);
-    return json({ logs: (logs || []).map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean) });
+    return json({ logs: await loadLogs(env) });
   }
   // 清空日志：只删日志，不动保活配置
   if (path === "/logs" && method === "DELETE") {
-    await redis(env, [["DEL", REDIS_PREFIX + ":logs"]]);
+    await clearLogs(env);
     return json({ ok: true });
   }
 
@@ -313,7 +237,7 @@ async function handleApi(request, env, url) {
 /** 每 15 分钟执行：对所有开启保活的机器续租约，异常时尝试拉起 */
 async function runKeepaliveTick(env) {
   if (!env.INSTABOX_API_KEY || !KEY_RE.test(env.INSTABOX_API_KEY)) throw new Error("未配置有效的 INSTABOX_API_KEY");
-  if (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN) throw new Error("未配置 Upstash Redis");
+  if (!env.DB) throw new Error("未配置 D1 数据库绑定 DB");
 
   const configs = await loadConfigs(env);
   const targets = Object.entries(configs).filter(([, c]) => c.keepalive === "on");
@@ -678,7 +602,7 @@ function renderPage() {
         <div class="logs-head">
           <h2>保活日志</h2>
           <div class="tools">
-            <span class="muted">最近 50 条 · 存于 Upstash Redis</span>
+            <span class="muted">最近 50 条 · 存于 Cloudflare D1</span>
             <button id="clearLogsBtn" class="btn danger">清空</button>
           </div>
         </div>
